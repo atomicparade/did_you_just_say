@@ -1,5 +1,5 @@
 use dotenv::dotenv;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use regex::Regex;
 use std::sync::Arc;
 use std::{env, process};
@@ -9,10 +9,15 @@ use serenity::client::Client;
 use serenity::model::prelude::{Message, Ready};
 use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
 
-struct BotUserIdKey;
+struct BotSettings {
+    id: Option<u64>,
+    admin_password: Option<String>,
+}
 
-impl TypeMapKey for BotUserIdKey {
-    type Value = u64;
+struct BotSettingsKey;
+
+impl TypeMapKey for BotSettingsKey {
+    type Value = BotSettings;
 }
 
 struct ShardManagerKey;
@@ -30,9 +35,8 @@ struct Command<'a> {
 fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     // Check whether the message begins with a mention of the bot
     let data = ctx.data.read();
-    let bot_user_id = data
-        .get::<BotUserIdKey>()
-        .expect("Unable to retrieve bot user ID");
+    let settings = data.get::<BotSettingsKey>().expect("is_command(): Unable to retrieve bot settings");
+    let bot_user_id = settings.id.expect("is_command(): Unable to retrieve bot user ID");
 
     let re_pattern = format!(r"<@!?{}>\s*(\S*)\s*((?s).*)", bot_user_id);
     let re_command =
@@ -76,7 +80,8 @@ impl EventHandler for Handler {
         );
 
         let mut data = ctx.data.write();
-        data.insert::<BotUserIdKey>(ready.user.id.0);
+        let settings = data.get_mut::<BotSettingsKey>().expect("ready(): Unable to retrieve bot settings");
+        settings.id = Some(ready.user.id.0);
     }
 
     fn message(&self, ctx: Context, msg: Message) {
@@ -133,6 +138,12 @@ fn main() {
         }
     };
 
+    let bot_admin_password = env::var("BOT_ADMIN_PASSWORD").ok();
+
+    if bot_admin_password.is_none() {
+        warn!("No bot admin password specified");
+    }
+
     info!("Connecting");
 
     let mut client = match Client::new(&discord_bot_token, Handler) {
@@ -148,6 +159,10 @@ fn main() {
     {
         let mut data = client.data.write();
         data.insert::<ShardManagerKey>(Arc::clone(&client.shard_manager));
+        data.insert::<BotSettingsKey>(BotSettings {
+            id: None,
+            admin_password: bot_admin_password,
+        });
     }
 
     if let Err(reason) = client.start() {
