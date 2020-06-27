@@ -1,14 +1,19 @@
 use dotenv::dotenv;
-use log;
-
-use std::sync::Arc;
 use log::{error, info};
+use regex::Regex;
+use std::sync::Arc;
 use std::{env, process};
 
-use serenity::client::Client;
 use serenity::client::bridge::gateway::ShardManager;
+use serenity::client::Client;
 use serenity::model::prelude::{Message, Ready};
 use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
+
+struct BotUserIdKey;
+
+impl TypeMapKey for BotUserIdKey {
+    type Value = u64;
+}
 
 struct ShardManagerKey;
 
@@ -16,20 +21,59 @@ impl TypeMapKey for ShardManagerKey {
     type Value = Arc<Mutex<ShardManager>>;
 }
 
+struct Command<'a>(&'a str);
+
+fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
+    // Check whether the message begins with a mention of the bot
+    let data = ctx.data.read();
+    let bot_user_id = data
+        .get::<BotUserIdKey>()
+        .expect("Unable to retrieve bot user ID");
+
+    let re_pattern = format!(r"<@!?{}>\s*((?s).*)", bot_user_id);
+    let re_command = Regex::new(&re_pattern).expect("Unable to create command matching pattern");
+
+    if let Some(captures) = re_command.captures(&msg.content) {
+        return Some(Command(
+            captures
+                .get(1)
+                .expect("Unable to extract command text from message containing command")
+                .as_str(),
+        ));
+    }
+
+    // Check whether this is a DM
+    if let Some(channel) = msg.channel(ctx) {
+        if channel.private().is_some() {
+            return Some(Command(&msg.content));
+        }
+    }
+
+    return None;
+}
+
 struct Handler;
 
 impl EventHandler for Handler {
-    fn ready(&self, _: Context, ready: Ready) {
+    fn ready(&self, ctx: Context, ready: Ready) {
         info!(
             "Connected as {}#{}",
             ready.user.name, ready.user.discriminator
         );
+
+        let mut data = ctx.data.write();
+        data.insert::<BotUserIdKey>(ready.user.id.0);
     }
 
     fn message(&self, ctx: Context, msg: Message) {
-        if msg.content == "test" {
-            msg.channel_id.say(&ctx.http, "Test successful").ok();
-        } else if msg.content == "quit" {
+        let command = match is_command(&ctx, &msg) {
+            Some(Command(command)) => command,
+            None => return,
+        };
+
+        if command.to_lowercase() == "quit" {
+            // TODO: Validate the user's authority
+
             info!(
                 "Quitting at the request of {}#{}",
                 msg.author.name, msg.author.discriminator
@@ -45,6 +89,9 @@ impl EventHandler for Handler {
             };
 
             shard_manager.lock().shutdown_all();
+        } else {
+            info!("Creating image for string {}", command);
+            // TODO
         }
     }
 }

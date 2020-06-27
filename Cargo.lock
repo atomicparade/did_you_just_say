@@ -177,6 +177,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "log",
+ "regex",
  "serenity",
 ]
 
