@@ -1,5 +1,5 @@
 [package]
-name = "did_you_say_bot"
+name = "did_you_just_say_bot"
 version = "0.1.0"
 authors = ["atomicparade"]
 edition = "2018"
