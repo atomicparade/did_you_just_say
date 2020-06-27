@@ -1,13 +1,18 @@
 use dotenv::dotenv;
+use image::DynamicImage;
 use log::{debug, error, info, warn};
 use regex::Regex;
+use std::fs::remove_file;
 use std::sync::Arc;
 use std::{env, process};
+use tempfile::tempdir;
 
 use serenity::client::bridge::gateway::ShardManager;
 use serenity::client::Client;
 use serenity::model::prelude::{Message, Ready};
 use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
+
+const BASE_IMAGE_PATH: &str = "did_you_just_say.png";
 
 struct BotSettings {
     id: Option<u64>,
@@ -19,6 +24,12 @@ struct BotSettingsKey;
 
 impl TypeMapKey for BotSettingsKey {
     type Value = BotSettings;
+}
+
+struct BaseImageKey;
+
+impl TypeMapKey for BaseImageKey {
+    type Value = DynamicImage;
 }
 
 struct ShardManagerKey;
@@ -92,6 +103,10 @@ impl EventHandler for Handler {
     }
 
     fn message(&self, ctx: Context, msg: Message) {
+        if msg.author.bot {
+            return;
+        }
+
         let command = match is_command(&ctx, &msg) {
             Some(command) => command,
             None => return,
@@ -166,7 +181,49 @@ impl EventHandler for Handler {
             }
             _ => {
                 info!("Creating image for string {}", command.entire);
-                // TODO
+
+                let data = ctx.data.read();
+                let base_image = data
+                    .get::<BaseImageKey>()
+                    .expect("Command create_image: Unable to retrieve base image");
+
+                static GENERATED_IMAGE_FILENAME: &str = "did_you_just_say.png";
+                let temp_dir =
+                    tempdir().expect("Command create_image: Failed to create temporary directory");
+
+                let file_path = format!(
+                    "{}/{}",
+                    temp_dir.path().to_str().expect(
+                        "Command create_image: Failed to retrieve temporary directory path"
+                    ),
+                    GENERATED_IMAGE_FILENAME
+                );
+
+                // TODO: Write command.rest to the image
+
+                match base_image.save(&file_path) {
+                    Ok(_) => {
+                        msg.channel_id
+                            .send_files(&ctx, vec![file_path.as_str()], |m| m)
+                            .ok();
+
+                        if let Err(reason) = remove_file(&file_path) {
+                            warn!("Command create_image: Temporary file \"{}\" could not be deleted: {:?}", file_path, reason);
+                        }
+                    }
+                    Err(reason) => {
+                        msg.channel_id
+                            .say(&ctx, "Sorry, something went wrong! Maybe try again?")
+                            .ok();
+
+                        warn!(
+                            "Command create_image: Failed to save image to \"{}\": {:?}",
+                            file_path, reason
+                        );
+                    }
+                }
+
+                // temp_dir falls out of scope and is automatically deleted
             }
         }
     }
@@ -180,6 +237,14 @@ fn main() {
         Ok(token) => token,
         Err(_) => {
             error!("DISCORD_BOT_TOKEN is missing");
+            process::exit(1);
+        }
+    };
+
+    let base_image = match image::open(BASE_IMAGE_PATH) {
+        Ok(image) => image,
+        Err(reason) => {
+            error!("Unable to open image {}: {:?}", BASE_IMAGE_PATH, reason);
             process::exit(1);
         }
     };
@@ -221,6 +286,7 @@ fn main() {
             admin_password: bot_admin_password,
             admin_ids: Vec::<u64>::new(),
         });
+        data.insert::<BaseImageKey>(base_image);
     }
 
     if let Err(reason) = client.start() {
