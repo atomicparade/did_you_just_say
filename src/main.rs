@@ -12,6 +12,7 @@ use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
 struct BotSettings {
     id: Option<u64>,
     admin_password: Option<String>,
+    admin_ids: Vec<u64>,
 }
 
 struct BotSettingsKey;
@@ -35,8 +36,12 @@ struct Command<'a> {
 fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     // Check whether the message begins with a mention of the bot
     let data = ctx.data.read();
-    let settings = data.get::<BotSettingsKey>().expect("is_command(): Unable to retrieve bot settings");
-    let bot_user_id = settings.id.expect("is_command(): Unable to retrieve bot user ID");
+    let settings = data
+        .get::<BotSettingsKey>()
+        .expect("is_command(): Unable to retrieve bot settings");
+    let bot_user_id = settings
+        .id
+        .expect("is_command(): Unable to retrieve bot user ID");
 
     let re_pattern = format!(r"<@!?{}>\s*(\S*)\s*((?s).*)", bot_user_id);
     let re_command =
@@ -51,7 +56,7 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     }
 
     // Check whether this is a DM
-    if let Some(channel) = msg.channel(ctx) {
+    if let Some(channel) = msg.channel(&ctx) {
         if channel.private().is_some() {
             let re_pattern = r"(\S*)\s*((?s).*)";
             let re_command = Regex::new(re_pattern)
@@ -80,7 +85,9 @@ impl EventHandler for Handler {
         );
 
         let mut data = ctx.data.write();
-        let settings = data.get_mut::<BotSettingsKey>().expect("ready(): Unable to retrieve bot settings");
+        let settings = data
+            .get_mut::<BotSettingsKey>()
+            .expect("ready(): Unable to retrieve bot settings");
         settings.id = Some(ready.user.id.0);
     }
 
@@ -97,17 +104,56 @@ impl EventHandler for Handler {
 
         match command.first_word.to_lowercase().as_str() {
             "auth" => {
-                // TODO
+                // Ensure that this is a private channel
+                if let Some(channel) = msg.channel(&ctx) {
+                    if channel.private().is_none() {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+
+                // If the user isn't already in the admin list, attempt to
+                // verify
+                let mut data = ctx.data.write();
+                let settings = data
+                    .get_mut::<BotSettingsKey>()
+                    .expect("Command quit: Unable to retrieve bot settings");
+
+                if settings.admin_ids.contains(msg.author.id.as_u64()) {
+                    msg.channel_id.say(&ctx, "You are already authorized.").ok();
+                }
+
+                if let Some(admin_password) = &settings.admin_password {
+                    if admin_password == command.rest {
+                        info!(
+                            "User sucessfully authorized as admin: {}#{}",
+                            msg.author.name, msg.author.discriminator
+                        );
+
+                        settings.admin_ids.push(msg.author.id.0);
+                    } else {
+                        info!(
+                            "User failed attempt to authorize as admin: {}#{}",
+                            msg.author.name, msg.author.discriminator
+                        );
+                    }
+                }
             }
             "quit" => {
-                // TODO: Validate the user's authority
+                let data = ctx.data.read();
+                let settings = data
+                    .get::<BotSettingsKey>()
+                    .expect("Command quit: Unable to retrieve bot settings");
+
+                if !settings.admin_ids.contains(msg.author.id.as_u64()) {
+                    return;
+                }
 
                 info!(
-                    "Quitting at the request of {}#{}",
+                    "User requested quit: {}#{}",
                     msg.author.name, msg.author.discriminator
                 );
-
-                let data = ctx.data.read();
 
                 let shard_manager = match data.get::<ShardManagerKey>() {
                     Some(shard_manager) => shard_manager,
@@ -138,7 +184,18 @@ fn main() {
         }
     };
 
-    let bot_admin_password = env::var("BOT_ADMIN_PASSWORD").ok();
+    let bot_admin_password = match env::var("BOT_ADMIN_PASSWORD") {
+        Ok(mut password) => {
+            password = password.trim().to_string();
+
+            if password.is_empty() {
+                None
+            } else {
+                Some(password)
+            }
+        }
+        Err(_) => None,
+    };
 
     if bot_admin_password.is_none() {
         warn!("No bot admin password specified");
@@ -162,6 +219,7 @@ fn main() {
         data.insert::<BotSettingsKey>(BotSettings {
             id: None,
             admin_password: bot_admin_password,
+            admin_ids: Vec::<u64>::new(),
         });
     }
 
