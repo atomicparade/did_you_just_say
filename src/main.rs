@@ -147,6 +147,8 @@ impl EventHandler for Handler {
                         );
 
                         settings.admin_ids.push(msg.author.id.0);
+
+                        msg.channel_id.say(&ctx, "Successfully authorized.").ok();
                     } else {
                         info!(
                             "User failed attempt to authorize as admin: {}#{}",
