@@ -95,7 +95,14 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     return None;
 }
 
+fn get_line_height(font: &Font, scale: Scale) -> u32 {
+    let v_metrics = font.v_metrics(scale);
+
+    (v_metrics.line_gap / 2f32 + v_metrics.ascent - v_metrics.descent) as u32
+}
+
 fn get_text_width(font: &Font, text: &str, scale: Scale) -> u32 {
+    // Return the rightmost edge of the last glyph in the text
     let point = Point { x: 0f32, y: 0f32 };
 
     let glyph = match font.layout(text, scale, point).last() {
@@ -241,9 +248,11 @@ impl EventHandler for Handler {
                 let color = Pixel::from_channels(0, 0, 0, 255);
                 let scale = Scale { x: 18.0, y: 18.0 };
 
+                let line_height = get_line_height(&font, scale);
+
                 // TODO: Handle multiple lines
                 let x = center_x - get_text_width(&font, &text, scale) / 2;
-                let y = center_y; // TODO: Center the text vertically
+                let y = center_y - line_height / 2;
 
                 let base_image =
                     drawing::draw_text(&mut base_image, color, x, y, scale, &font, &text);
