@@ -251,12 +251,17 @@ impl EventHandler for Handler {
 
                 let line_height = get_line_height(&font, scale);
 
-                // TODO: Handle multiple lines
-                let x = center_x - get_text_width(&font, &text, scale) / 2;
-                let y = center_y - line_height / 2;
+                let lines: Vec<&str> = text.lines().collect();
+                let mut curr_y = center_y - (line_height * (lines.len() as u32) / 2);
 
-                let base_image =
-                    drawing::draw_text(&mut base_image, color, x, y, scale, &font, &text);
+                for line in lines {
+                    let x = center_x - get_text_width(&font, &line, scale) / 2;
+
+                    base_image =
+                        drawing::draw_text(&mut base_image, color, x, curr_y, scale, &font, &line);
+
+                    curr_y += line_height;
+                }
 
                 match base_image.save(&file_path) {
                     Ok(_) => {
