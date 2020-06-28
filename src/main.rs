@@ -1,8 +1,11 @@
 use dotenv::dotenv;
-use image::DynamicImage;
+use image::{Pixel, RgbaImage};
+use imageproc::drawing;
 use log::{debug, error, info, warn};
 use regex::Regex;
-use std::fs::remove_file;
+use rusttype::{Font, Scale};
+use std::fs::{remove_file, File};
+use std::io::Read;
 use std::sync::Arc;
 use std::{env, process};
 use tempfile::tempdir;
@@ -29,7 +32,13 @@ impl TypeMapKey for BotSettingsKey {
 struct BaseImageKey;
 
 impl TypeMapKey for BaseImageKey {
-    type Value = DynamicImage;
+    type Value = RgbaImage;
+}
+
+struct FontKey;
+
+impl TypeMapKey for FontKey {
+    type Value = Font<'static>;
 }
 
 struct ShardManagerKey;
@@ -137,6 +146,7 @@ impl EventHandler for Handler {
 
                 if settings.admin_ids.contains(msg.author.id.as_u64()) {
                     msg.channel_id.say(&ctx, "You are already authorized.").ok();
+                    return;
                 }
 
                 if let Some(admin_password) = &settings.admin_password {
@@ -182,12 +192,19 @@ impl EventHandler for Handler {
                 shard_manager.lock().shutdown_all();
             }
             _ => {
-                info!("Creating image for string {}", command.entire);
+                if command.entire.is_empty() {
+                    return;
+                }
+
+                let text = format!("'{}'?", command.entire.to_uppercase());
+
+                debug!("Creating image for string \"{}\"", text);
 
                 let data = ctx.data.read();
-                let base_image = data
+                let mut base_image = data
                     .get::<BaseImageKey>()
-                    .expect("Command create_image: Unable to retrieve base image");
+                    .expect("Command create_image: Unable to retrieve base image")
+                    .clone();
 
                 static GENERATED_IMAGE_FILENAME: &str = "did_you_just_say.png";
                 let temp_dir =
@@ -201,7 +218,19 @@ impl EventHandler for Handler {
                     GENERATED_IMAGE_FILENAME
                 );
 
-                // TODO: Write command.rest to the image
+                // TODO: Center the text
+                // TODO: Handle multiple lines
+                let (x, y) = (412, 278);
+
+                let font = data
+                    .get::<FontKey>()
+                    .expect("Command create_image: Unable to retrieve font");
+
+                let color = Pixel::from_channels(0, 0, 0, 255);
+                let scale = Scale { x: 18.0, y: 18.0 };
+
+                let base_image =
+                    drawing::draw_text(&mut base_image, color, x, y, scale, &font, &text);
 
                 match base_image.save(&file_path) {
                     Ok(_) => {
@@ -244,9 +273,40 @@ fn main() {
     };
 
     let base_image = match image::open(BASE_IMAGE_PATH) {
-        Ok(image) => image,
+        Ok(image) => image.into_rgba(),
         Err(reason) => {
             error!("Unable to open image {}: {:?}", BASE_IMAGE_PATH, reason);
+            process::exit(1);
+        }
+    };
+
+    let font = match env::var("FONT_FILE") {
+        Ok(filename) => {
+            let mut font_file = match File::open(&filename) {
+                Ok(file) => file,
+                Err(reason) => {
+                    error!("Unable to open file \"{}\": {:?}", filename, reason);
+                    process::exit(1);
+                }
+            };
+
+            let mut buffer = Vec::new();
+
+            if let Err(reason) = font_file.read_to_end(&mut buffer) {
+                error!("Unable to read file \"{}\": {:?}", filename, reason);
+                process::exit(1);
+            }
+
+            match Font::from_bytes(buffer) {
+                Ok(font) => font,
+                Err(reason) => {
+                    error!("Unable to open font \"{}\": {:?}", filename, reason);
+                    process::exit(1);
+                }
+            }
+        }
+        Err(_) => {
+            error!("FONT_FILE is missing");
             process::exit(1);
         }
     };
@@ -289,6 +349,7 @@ fn main() {
             admin_ids: Vec::<u64>::new(),
         });
         data.insert::<BaseImageKey>(base_image);
+        data.insert::<FontKey>(font);
     }
 
     if let Err(reason) = client.start() {
