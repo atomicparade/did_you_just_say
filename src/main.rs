@@ -69,7 +69,8 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
 
     if let Some(captures) = re_command.captures(&msg.content) {
         return Some(Command {
-            entire: captures.get(0).expect("Unable to extract entire command text from message beginning with bot ID").as_str(),
+            entire:
+                &msg.content[captures.get(1).expect("Unable to extract entire command text from message beginning with bot ID").start()..],
             first_word: captures.get(1).expect("Unable to extract first word of command text from message beginning with bot ID").as_str(),
             rest: captures.get(2).expect("Unable to extract rest of command text from message beginning with bot ID").as_str(),
         });
