@@ -4,18 +4,19 @@ use imageproc::drawing;
 use log::{debug, error, info, warn};
 use regex::Regex;
 use rusttype::{Font, Point, Scale};
-use std::fs::{remove_file, File};
+use std::collections::HashMap;
+use std::fs::{read_to_string, remove_file, File};
 use std::io::Read;
 use std::sync::Arc;
 use std::{env, process};
 use tempfile::tempdir;
+use yaml_rust::yaml::Yaml;
+use yaml_rust::YamlLoader;
 
 use serenity::client::bridge::gateway::ShardManager;
 use serenity::client::Client;
 use serenity::model::prelude::{Message, Ready};
 use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
-
-const BASE_IMAGE_PATH: &str = "did_you_just_say.png";
 
 struct BotSettings {
     id: Option<u64>,
@@ -29,16 +30,31 @@ impl TypeMapKey for BotSettingsKey {
     type Value = BotSettings;
 }
 
-struct BaseImageKey;
+struct FontsKey;
 
-impl TypeMapKey for BaseImageKey {
-    type Value = RgbaImage;
+impl TypeMapKey for FontsKey {
+    type Value = HashMap<String, Font<'static>>;
 }
 
-struct FontKey;
+struct Meme {
+    image: RgbaImage,
+    font: String,
+    scale: Scale,
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+    center: Point<u32>,
+    text_prefix: String,
+    text_suffix: String,
+    command: String,
+    is_default: bool,
+}
 
-impl TypeMapKey for FontKey {
-    type Value = Font<'static>;
+struct MemesKey;
+
+impl TypeMapKey for MemesKey {
+    type Value = Vec<Meme>;
 }
 
 struct ShardManagerKey;
@@ -94,6 +110,313 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     }
 
     return None;
+}
+
+fn load_font(filename: &str) -> Result<Font<'static>, String> {
+    let mut font_file = match File::open(&filename) {
+        Ok(file) => file,
+        Err(reason) => {
+            return Err(format!("Unable to open file \"{}\": {}", filename, reason));
+        }
+    };
+
+    let mut buffer = Vec::new();
+
+    if let Err(reason) = font_file.read_to_end(&mut buffer) {
+        return Err(format!("Unable to read file \"{}\": {}", filename, reason));
+    }
+
+    let font = match Font::from_bytes(buffer) {
+        Ok(font) => font,
+        Err(reason) => {
+            return Err(format!("Unable to open font \"{}\": {}", filename, reason));
+        }
+    };
+
+    Ok(font)
+}
+
+fn load_image(filename: &str) -> Result<RgbaImage, String> {
+    let image = match image::open(filename) {
+        Ok(image) => image.to_rgba(),
+        Err(reason) => {
+            return Err(format!("Unable to open image {}: {}", filename, reason));
+        }
+    };
+
+    return Ok(image);
+}
+
+fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
+    let mut fonts = HashMap::<String, Font<'static>>::new();
+    let mut memes = Vec::<Meme>::new();
+
+    let config = match read_to_string(&filename) {
+        Ok(contents) => contents,
+        Err(reason) => {
+            error!("Unable to read config file \"{}\": {}", filename, reason);
+            process::exit(1);
+        }
+    };
+
+    let yaml = match YamlLoader::load_from_str(&config) {
+        Ok(yaml) => yaml,
+        Err(reason) => {
+            error!("Unable to parse config file \"{}\": {}", filename, reason);
+            process::exit(1);
+        }
+    };
+
+    let yaml = match yaml.first() {
+        Some(yaml) => yaml,
+        _ => {
+            error!("Empty config file");
+            process::exit(1);
+        }
+    };
+
+    if let Yaml::Array(meme_sections) = yaml {
+        for meme_section in meme_sections {
+            if let Yaml::Hash(hash) = meme_section {
+                let mut read_image_filename: Option<String> = None;
+                let mut read_font_filename: Option<String> = None;
+                let mut read_font_size: Option<u32> = None;
+                let mut read_left: Option<u32> = None;
+                let mut read_top: Option<u32> = None;
+                let mut read_right: Option<u32> = None;
+                let mut read_bottom: Option<u32> = None;
+                let mut read_text_prefix: Option<String> = None;
+                let mut read_text_suffix: Option<String> = None;
+                let mut read_command: Option<String> = None;
+                let mut read_is_default: Option<bool> = None;
+
+                for (key, value) in hash {
+                    let key = match key {
+                        Yaml::String(key) => key,
+                        unknown_key => {
+                            warn!(
+                                "Config contains invalid non-string key \"{:?}\"",
+                                unknown_key
+                            );
+                            continue;
+                        }
+                    };
+
+                    match key.as_str() {
+                        "filename" => {
+                            if let Yaml::String(image_filename) = value {
+                                read_image_filename = Some(image_filename.clone());
+                            } else {
+                                warn!(
+                                    "Config contains invalid value for image filename \"{:?}\"",
+                                    value
+                                );
+                            }
+                        }
+                        "font" => {
+                            if let Yaml::String(font_filename) = value {
+                                read_font_filename = Some(font_filename.clone());
+                            } else {
+                                warn!(
+                                    "Config contains invalid value for font filename \"{:?}\"",
+                                    value
+                                );
+                            }
+                        }
+                        "font_size" => {
+                            let mut valid_value_found = false;
+
+                            if let Yaml::Integer(font_size) = value {
+                                if *font_size > 0 {
+                                    read_font_size = Some(*font_size as u32);
+                                    valid_value_found = true;
+                                }
+                            }
+
+                            if !valid_value_found {
+                                warn!(
+                                    "Config contains invalid value for font_size: \"{:?}\"",
+                                    value
+                                );
+                            }
+                        }
+                        "left" => {
+                            let mut valid_value_found = false;
+
+                            if let Yaml::Integer(left) = value {
+                                if *left > 0 {
+                                    read_left = Some(*left as u32);
+                                    valid_value_found = true;
+                                }
+                            }
+
+                            if !valid_value_found {
+                                warn!("Config contains invalid value for left: \"{:?}\"", value);
+                            }
+                        }
+                        "top" => {
+                            let mut valid_value_found = false;
+
+                            if let Yaml::Integer(top) = value {
+                                if *top > 0 {
+                                    read_top = Some(*top as u32);
+                                    valid_value_found = true;
+                                }
+                            }
+
+                            if !valid_value_found {
+                                warn!("Config contains invalid value for top: \"{:?}\"", value);
+                            }
+                        }
+                        "right" => {
+                            let mut valid_value_found = false;
+
+                            if let Yaml::Integer(right) = value {
+                                if *right > 0 {
+                                    read_right = Some(*right as u32);
+                                    valid_value_found = true;
+                                }
+                            }
+
+                            if !valid_value_found {
+                                warn!("Config contains invalid value for right: \"{:?}\"", value);
+                            }
+                        }
+                        "bottom" => {
+                            let mut valid_value_found = false;
+
+                            if let Yaml::Integer(bottom) = value {
+                                if *bottom > 0 {
+                                    read_bottom = Some(*bottom as u32);
+                                    valid_value_found = true;
+                                }
+                            }
+
+                            if !valid_value_found {
+                                warn!("Config contains invalid value for bottom: \"{:?}\"", value);
+                            }
+                        }
+                        "text_prefix" => {
+                            if let Yaml::String(text_prefix) = value {
+                                read_text_prefix = Some(text_prefix.clone());
+                            } else {
+                                warn!(
+                                    "Config contains invalid value for text prefix \"{:?}\"",
+                                    value
+                                );
+                            }
+                        }
+                        "text_suffix" => {
+                            if let Yaml::String(text_suffix) = value {
+                                read_text_suffix = Some(text_suffix.clone());
+                            } else {
+                                warn!(
+                                    "Config contains invalid value for text suffix \"{:?}\"",
+                                    value
+                                );
+                            }
+                        }
+                        "command" => {
+                            if let Yaml::String(command) = value {
+                                read_command = Some(command.clone());
+                            } else {
+                                warn!("Config contains invalid value for command \"{:?}\"", value);
+                            }
+                        }
+                        "is_default" => {
+                            if let Yaml::Boolean(is_default) = value {
+                                read_is_default = Some(is_default.clone());
+                            } else {
+                                warn!("Config contains invalid value for default \"{:?}\"", value);
+                            }
+                        }
+                        unknown_key => {
+                            warn!("Config contains unknown key {}", unknown_key);
+                        }
+                    }
+                }
+
+                if read_image_filename.is_none() {
+                    warn!("Config file is missing an image filename for a meme; skipping");
+                    continue;
+                }
+
+                if read_font_filename.is_none() {
+                    if fonts.is_empty() {
+                        warn!("Config file is missing a font for an image; skipping");
+                    } else {
+                        warn!("Config file is missing a font for an image; using a random font");
+                        read_font_filename = Some(fonts.keys().next().unwrap().clone());
+                    }
+                }
+
+                let image_filename = read_image_filename.clone().unwrap();
+
+                let image = match load_image(&image_filename) {
+                    Ok(image) => image,
+                    Err(reason) => {
+                        warn!("Unable to load image \"{}\": {}", image_filename, reason);
+                        continue;
+                    }
+                };
+
+                let font_name = read_font_filename.unwrap();
+
+                if !fonts.contains_key(&font_name) {
+                    match load_font(&font_name) {
+                        Ok(font) => {
+                            fonts.insert(font_name.clone(), font);
+                        }
+                        Err(reason) => {
+                            warn!("Unable to load font \"{}\": {}", font_name, reason);
+                        }
+                    }
+                }
+
+                // TODO: Find or load the font
+
+                let font_size = read_font_size.unwrap_or(12);
+                let scale = Scale {
+                    x: font_size as f32,
+                    y: font_size as f32,
+                };
+                let left = read_left.unwrap_or(0);
+                let top = read_top.unwrap_or(0);
+                let right = read_right.unwrap_or(image.width());
+                let bottom = read_bottom.unwrap_or(image.height());
+                let center = Point {
+                    x: right / 2,
+                    y: bottom / 2,
+                };
+                let text_prefix = read_text_prefix.clone().unwrap_or("".into());
+                let text_suffix = read_text_suffix.clone().unwrap_or("".into());
+                let command = read_command.clone().unwrap_or("".into());
+                let is_default = read_is_default.unwrap_or(false);
+
+                memes.push(Meme {
+                    image,
+                    font: font_name.clone(),
+                    scale,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    center,
+                    text_prefix,
+                    text_suffix,
+                    command,
+                    is_default,
+                });
+            } else {
+                warn!("Config contains invalid content");
+            }
+        }
+    } else {
+        error!("Config file does not appear to contain any meme data or is malformed");
+        process::exit(1);
+    }
+
+    (fonts, memes)
 }
 
 fn get_line_height(font: &Font, scale: Scale) -> u32 {
@@ -222,6 +545,7 @@ impl EventHandler for Handler {
 
                 debug!("Creating image for string \"{}\"", text);
 
+                /*
                 let data = ctx.data.read();
                 let mut base_image = data
                     .get::<BaseImageKey>()
@@ -284,6 +608,7 @@ impl EventHandler for Handler {
                         );
                     }
                 }
+                */
 
                 // temp_dir falls out of scope and is automatically deleted
             }
@@ -295,49 +620,11 @@ fn main() {
     dotenv().ok();
     env_logger::init();
 
+    // Collect basic config
     let discord_bot_token = match env::var("DISCORD_BOT_TOKEN") {
         Ok(token) => token,
         Err(_) => {
             error!("DISCORD_BOT_TOKEN is missing");
-            process::exit(1);
-        }
-    };
-
-    let base_image = match image::open(BASE_IMAGE_PATH) {
-        Ok(image) => image.into_rgba(),
-        Err(reason) => {
-            error!("Unable to open image {}: {:?}", BASE_IMAGE_PATH, reason);
-            process::exit(1);
-        }
-    };
-
-    let font = match env::var("FONT_FILE") {
-        Ok(filename) => {
-            let mut font_file = match File::open(&filename) {
-                Ok(file) => file,
-                Err(reason) => {
-                    error!("Unable to open file \"{}\": {:?}", filename, reason);
-                    process::exit(1);
-                }
-            };
-
-            let mut buffer = Vec::new();
-
-            if let Err(reason) = font_file.read_to_end(&mut buffer) {
-                error!("Unable to read file \"{}\": {:?}", filename, reason);
-                process::exit(1);
-            }
-
-            match Font::from_bytes(buffer) {
-                Ok(font) => font,
-                Err(reason) => {
-                    error!("Unable to open font \"{}\": {:?}", filename, reason);
-                    process::exit(1);
-                }
-            }
-        }
-        Err(_) => {
-            error!("FONT_FILE is missing");
             process::exit(1);
         }
     };
@@ -359,12 +646,18 @@ fn main() {
         warn!("No bot admin password specified");
     }
 
+    let (fonts, memes) = load_memes(&env::var("CONFIG_FILE").unwrap_or("config.yml".into()));
+
+    if memes.is_empty() {
+        warn!("No memes were loaded");
+    }
+
     info!("Connecting");
 
     let mut client = match Client::new(&discord_bot_token, Handler) {
         Ok(client) => client,
         Err(reason) => {
-            error!("Unable to create client: {:?}", reason);
+            error!("Unable to create client: {}", reason);
             process::exit(1);
         }
     };
@@ -379,12 +672,12 @@ fn main() {
             admin_password: bot_admin_password,
             admin_ids: Vec::<u64>::new(),
         });
-        data.insert::<BaseImageKey>(base_image);
-        data.insert::<FontKey>(font);
+        data.insert::<FontsKey>(fonts);
+        data.insert::<MemesKey>(memes);
     }
 
     if let Err(reason) = client.start() {
-        error!("Unable to start client: {:?}", reason);
+        error!("Unable to start client: {}", reason);
         process::exit(1);
     }
 }

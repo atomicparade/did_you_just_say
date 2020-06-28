@@ -1,5 +1,8 @@
 /target
 
 .env
+*.jpg
+*.png
 *.otf
 *.ttf
+*.yml
