@@ -3,7 +3,7 @@ use image::{Pixel, RgbaImage};
 use imageproc::drawing;
 use log::{debug, error, info, warn};
 use regex::Regex;
-use rusttype::{Font, Scale};
+use rusttype::{Font, Point, Scale};
 use std::fs::{remove_file, File};
 use std::io::Read;
 use std::sync::Arc;
@@ -93,6 +93,20 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     }
 
     return None;
+}
+
+fn get_text_width(font: &Font, text: &str, scale: Scale) -> u32 {
+    let point = Point { x: 0f32, y: 0f32 };
+
+    let glyph = match font.layout(text, scale, point).last() {
+        Some(glyph) => glyph,
+        None => return 0,
+    };
+
+    match glyph.pixel_bounding_box() {
+        Some(point) => point.max.x as u32,
+        None => return 0,
+    }
 }
 
 struct Handler;
@@ -218,9 +232,7 @@ impl EventHandler for Handler {
                     GENERATED_IMAGE_FILENAME
                 );
 
-                // TODO: Center the text
-                // TODO: Handle multiple lines
-                let (x, y) = (412, 278);
+                let (center_x, center_y) = (412, 278);
 
                 let font = data
                     .get::<FontKey>()
@@ -228,6 +240,10 @@ impl EventHandler for Handler {
 
                 let color = Pixel::from_channels(0, 0, 0, 255);
                 let scale = Scale { x: 18.0, y: 18.0 };
+
+                // TODO: Handle multiple lines
+                let x = center_x - get_text_width(&font, &text, scale) / 2;
+                let y = center_y; // TODO: Center the text vertically
 
                 let base_image =
                     drawing::draw_text(&mut base_image, color, x, y, scale, &font, &text);
