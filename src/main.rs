@@ -178,16 +178,16 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
     if let Yaml::Array(meme_sections) = yaml {
         for meme_section in meme_sections {
             if let Yaml::Hash(hash) = meme_section {
-                let mut read_image_filename: Option<String> = None;
+                let mut read_image_filename: Option<&str> = None;
                 let mut read_font_filename: Option<String> = None;
                 let mut read_font_size: Option<u32> = None;
                 let mut read_left: Option<u32> = None;
                 let mut read_top: Option<u32> = None;
                 let mut read_right: Option<u32> = None;
                 let mut read_bottom: Option<u32> = None;
-                let mut read_text_prefix: Option<String> = None;
-                let mut read_text_suffix: Option<String> = None;
-                let mut read_command: Option<String> = None;
+                let mut read_text_prefix: Option<&str> = None;
+                let mut read_text_suffix: Option<&str> = None;
+                let mut read_command: Option<&str> = None;
                 let mut read_is_default: Option<bool> = None;
 
                 for (key, value) in hash {
@@ -205,7 +205,7 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                     match key.as_str() {
                         "filename" => {
                             if let Yaml::String(image_filename) = value {
-                                read_image_filename = Some(image_filename.clone());
+                                read_image_filename = Some(image_filename);
                             } else {
                                 warn!(
                                     "Config contains invalid value for image filename \"{:?}\"",
@@ -215,7 +215,7 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                         }
                         "font" => {
                             if let Yaml::String(font_filename) = value {
-                                read_font_filename = Some(font_filename.clone());
+                                read_font_filename = Some(font_filename.into());
                             } else {
                                 warn!(
                                     "Config contains invalid value for font filename \"{:?}\"",
@@ -298,7 +298,7 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                         }
                         "text_prefix" => {
                             if let Yaml::String(text_prefix) = value {
-                                read_text_prefix = Some(text_prefix.clone());
+                                read_text_prefix = Some(text_prefix);
                             } else {
                                 warn!(
                                     "Config contains invalid value for text prefix \"{:?}\"",
@@ -308,7 +308,7 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                         }
                         "text_suffix" => {
                             if let Yaml::String(text_suffix) = value {
-                                read_text_suffix = Some(text_suffix.clone());
+                                read_text_suffix = Some(text_suffix);
                             } else {
                                 warn!(
                                     "Config contains invalid value for text suffix \"{:?}\"",
@@ -318,14 +318,14 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                         }
                         "command" => {
                             if let Yaml::String(command) = value {
-                                read_command = Some(command.clone());
+                                read_command = Some(command);
                             } else {
                                 warn!("Config contains invalid value for command \"{:?}\"", value);
                             }
                         }
                         "is_default" => {
                             if let Yaml::Boolean(is_default) = value {
-                                read_is_default = Some(is_default.clone());
+                                read_is_default = Some(*is_default);
                             } else {
                                 warn!("Config contains invalid value for default \"{:?}\"", value);
                             }
@@ -346,11 +346,11 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                         warn!("Config file is missing a font for an image; skipping");
                     } else {
                         warn!("Config file is missing a font for an image; using a random font");
-                        read_font_filename = Some(fonts.keys().next().unwrap().clone());
+                        read_font_filename = Some(fonts.keys().next().unwrap().trim().into());
                     }
                 }
 
-                let image_filename = read_image_filename.clone().unwrap();
+                let image_filename = read_image_filename.unwrap().trim();
 
                 let image = match load_image(&image_filename) {
                     Ok(image) => image,
@@ -385,17 +385,17 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                 let right = read_right.unwrap_or(image.width());
                 let bottom = read_bottom.unwrap_or(image.height());
                 let center = Point {
-                    x: right / 2,
-                    y: bottom / 2,
+                    x: (left + right) / 2,
+                    y: (top + bottom) / 2,
                 };
-                let text_prefix = read_text_prefix.clone().unwrap_or("".into());
-                let text_suffix = read_text_suffix.clone().unwrap_or("".into());
-                let command = read_command.clone().unwrap_or("".into());
+                let text_prefix = read_text_prefix.clone().unwrap_or("").into();
+                let text_suffix = read_text_suffix.clone().unwrap_or("").into();
+                let command = read_command.clone().unwrap_or("").into();
                 let is_default = read_is_default.unwrap_or(false);
 
                 memes.push(Meme {
                     image,
-                    font: font_name.clone(),
+                    font: font_name.into(),
                     scale,
                     left,
                     top,
@@ -466,151 +466,187 @@ impl EventHandler for Handler {
             None => return,
         };
 
+        if command.entire.is_empty() {
+            msg.channel_id.say(&ctx, "Yes?").ok();
+            return;
+        }
+
         debug!(
             "Received command; first word: \"{}\", rest: \"{}\"",
             command.first_word, command.rest
         );
 
-        match command.first_word.to_lowercase().as_str() {
-            "auth" => {
-                // Ensure that this is a private channel
-                if let Some(channel) = msg.channel(&ctx) {
-                    if channel.private().is_none() {
+        let mut data = ctx.data.write();
+        let settings = data
+            .get_mut::<BotSettingsKey>()
+            .expect("Command quit: Unable to retrieve bot settings");
+
+        let first_word = command.first_word.to_lowercase();
+
+        let is_private_channel = match msg.channel(&ctx) {
+            Some(channel) => channel.private().is_some(),
+            None => false,
+        };
+
+        if is_private_channel && first_word == "auth" {
+            if settings.admin_ids.contains(msg.author.id.as_u64()) {
+                msg.channel_id.say(&ctx, "You are already authorized.").ok();
+                return;
+            }
+
+            if let Some(admin_password) = &settings.admin_password {
+                if admin_password == command.rest {
+                    info!(
+                        "User sucessfully authorized as admin: {}#{}",
+                        msg.author.name, msg.author.discriminator
+                    );
+
+                    settings.admin_ids.push(msg.author.id.0);
+
+                    msg.channel_id.say(&ctx, "Successfully authorized.").ok();
+                } else {
+                    info!(
+                        "User failed attempt to authorize as admin: {}#{}",
+                        msg.author.name, msg.author.discriminator
+                    );
+                }
+            }
+        } else if is_private_channel
+            && first_word == "quit"
+            && settings.admin_ids.contains(msg.author.id.as_u64())
+        {
+            info!(
+                "User requested quit: {}#{}",
+                msg.author.name, msg.author.discriminator
+            );
+
+            let shard_manager = match data.get::<ShardManagerKey>() {
+                Some(shard_manager) => shard_manager,
+                None => {
+                    process::exit(1);
+                }
+            };
+
+            shard_manager.lock().shutdown_all();
+        } else {
+            if command.entire.is_empty() {
+                return;
+            }
+
+            let memes = data
+                .get::<MemesKey>()
+                .expect("Create meme: Unable to retrieve memes");
+
+            let matches = memes
+                .iter()
+                .filter(|meme| meme.command == first_word)
+                .collect::<Vec<&Meme>>();
+
+            let matching_command = matches.first();
+
+            let text: &str;
+            let meme: &Meme;
+
+            if matching_command.is_some() {
+                meme = matching_command.unwrap();
+                text = command.rest;
+            } else {
+                let matches = memes
+                    .iter()
+                    .filter(|meme| meme.is_default)
+                    .collect::<Vec<&Meme>>();
+
+                let default_command = matches.first();
+
+                if default_command.is_some() {
+                    meme = default_command.unwrap();
+                    text = command.entire;
+                } else {
+                    msg.channel_id
+                        .say(&ctx, "I have no idea what's going on. (No memes loaded.)")
+                        .ok();
+                    return;
+                }
+            }
+
+            let text = meme.text_prefix.clone() + &text.to_uppercase() + &meme.text_suffix;
+
+            debug!("Creating meme \"{}\" with text \"{}\"", meme.command, text);
+
+            static GENERATED_IMAGE_FILENAME: &str = "did_you_just_say.png";
+
+            let mut image = meme.image.clone();
+
+            let temp_dir =
+                tempdir().expect("Command create_image: Failed to create temporary directory");
+
+            let file_path = format!(
+                "{}/{}",
+                temp_dir
+                    .path()
+                    .to_str()
+                    .expect("Command create_image: Failed to retrieve temporary directory path"),
+                GENERATED_IMAGE_FILENAME
+            );
+
+            let fonts = data
+                .get::<FontsKey>()
+                .expect("Create meme: Unable to retrieve fonts");
+
+            let font = match fonts.get(&meme.font) {
+                Some(font) => font,
+                None => match fonts.values().next() {
+                    Some(font) => font,
+                    None => {
+                        msg.channel_id
+                            .say(
+                                &ctx,
+                                "I don't know how to say this...Literally. (No fonts loaded.)",
+                            )
+                            .ok();
                         return;
                     }
-                } else {
-                    return;
-                }
+                },
+            };
 
-                // If the user isn't already in the admin list, attempt to
-                // verify
-                let mut data = ctx.data.write();
-                let settings = data
-                    .get_mut::<BotSettingsKey>()
-                    .expect("Command quit: Unable to retrieve bot settings");
+            let color = Pixel::from_channels(0, 0, 0, 255);
+            let scale = meme.scale;
 
-                if settings.admin_ids.contains(msg.author.id.as_u64()) {
-                    msg.channel_id.say(&ctx, "You are already authorized.").ok();
-                    return;
-                }
+            let line_height = get_line_height(&font, scale);
 
-                if let Some(admin_password) = &settings.admin_password {
-                    if admin_password == command.rest {
-                        info!(
-                            "User sucessfully authorized as admin: {}#{}",
-                            msg.author.name, msg.author.discriminator
-                        );
+            let lines: Vec<&str> = text.lines().collect();
+            let mut curr_y = meme.center.y - (line_height * (lines.len() as u32) / 2);
 
-                        settings.admin_ids.push(msg.author.id.0);
+            for line in lines {
+                let x = meme.center.x - get_text_width(&font, &line, scale) / 2;
 
-                        msg.channel_id.say(&ctx, "Successfully authorized.").ok();
-                    } else {
-                        info!(
-                            "User failed attempt to authorize as admin: {}#{}",
-                            msg.author.name, msg.author.discriminator
-                        );
-                    }
-                }
+                debug!("Drawing text at ({}, {})", x, curr_y);
+
+                image = drawing::draw_text(&mut image, color, x, curr_y, scale, &font, &line);
+
+                curr_y += line_height;
             }
-            "quit" => {
-                let data = ctx.data.read();
-                let settings = data
-                    .get::<BotSettingsKey>()
-                    .expect("Command quit: Unable to retrieve bot settings");
 
-                if !settings.admin_ids.contains(msg.author.id.as_u64()) {
-                    return;
-                }
+            match image.save(&file_path) {
+                Ok(_) => {
+                    msg.channel_id
+                        .send_files(&ctx, vec![file_path.as_str()], |m| m)
+                        .ok();
 
-                info!(
-                    "User requested quit: {}#{}",
-                    msg.author.name, msg.author.discriminator
-                );
-
-                let shard_manager = match data.get::<ShardManagerKey>() {
-                    Some(shard_manager) => shard_manager,
-                    None => {
-                        process::exit(1);
-                    }
-                };
-
-                shard_manager.lock().shutdown_all();
-            }
-            _ => {
-                if command.entire.is_empty() {
-                    return;
-                }
-
-                let text = format!("'{}'?", command.entire.to_uppercase());
-
-                debug!("Creating image for string \"{}\"", text);
-
-                /*
-                let data = ctx.data.read();
-                let mut base_image = data
-                    .get::<BaseImageKey>()
-                    .expect("Command create_image: Unable to retrieve base image")
-                    .clone();
-
-                static GENERATED_IMAGE_FILENAME: &str = "did_you_just_say.png";
-                let temp_dir =
-                    tempdir().expect("Command create_image: Failed to create temporary directory");
-
-                let file_path = format!(
-                    "{}/{}",
-                    temp_dir.path().to_str().expect(
-                        "Command create_image: Failed to retrieve temporary directory path"
-                    ),
-                    GENERATED_IMAGE_FILENAME
-                );
-
-                let (center_x, center_y) = (412, 278);
-
-                let font = data
-                    .get::<FontKey>()
-                    .expect("Command create_image: Unable to retrieve font");
-
-                let color = Pixel::from_channels(0, 0, 0, 255);
-                let scale = Scale { x: 18.0, y: 18.0 };
-
-                let line_height = get_line_height(&font, scale);
-
-                let lines: Vec<&str> = text.lines().collect();
-                let mut curr_y = center_y - (line_height * (lines.len() as u32) / 2);
-
-                for line in lines {
-                    let x = center_x - get_text_width(&font, &line, scale) / 2;
-
-                    base_image =
-                        drawing::draw_text(&mut base_image, color, x, curr_y, scale, &font, &line);
-
-                    curr_y += line_height;
-                }
-
-                match base_image.save(&file_path) {
-                    Ok(_) => {
-                        msg.channel_id
-                            .send_files(&ctx, vec![file_path.as_str()], |m| m)
-                            .ok();
-
-                        if let Err(reason) = remove_file(&file_path) {
-                            warn!("Command create_image: Temporary file \"{}\" could not be deleted: {:?}", file_path, reason);
-                        }
-                    }
-                    Err(reason) => {
-                        msg.channel_id
-                            .say(&ctx, "Sorry, something went wrong! Maybe try again?")
-                            .ok();
-
-                        warn!(
-                            "Command create_image: Failed to save image to \"{}\": {:?}",
-                            file_path, reason
-                        );
+                    if let Err(reason) = remove_file(&file_path) {
+                        warn!("Command create_image: Temporary file \"{}\" could not be deleted: {:?}", file_path, reason);
                     }
                 }
-                */
+                Err(reason) => {
+                    msg.channel_id
+                        .say(&ctx, "Sorry, something went wrong! Maybe try again?")
+                        .ok();
 
-                // temp_dir falls out of scope and is automatically deleted
+                    warn!(
+                        "Command create_image: Failed to save image to \"{}\": {:?}",
+                        file_path, reason
+                    );
+                }
             }
         }
     }
@@ -647,6 +683,10 @@ fn main() {
     }
 
     let (fonts, memes) = load_memes(&env::var("CONFIG_FILE").unwrap_or("config.yml".into()));
+
+    if fonts.is_empty() {
+        warn!("No fonts were loaded");
+    }
 
     if memes.is_empty() {
         warn!("No memes were loaded");
