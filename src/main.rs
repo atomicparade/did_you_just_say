@@ -373,8 +373,6 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                     }
                 }
 
-                // TODO: Find or load the font
-
                 let font_size = read_font_size.unwrap_or(12);
                 let scale = Scale {
                     x: font_size as f32,
@@ -390,7 +388,7 @@ fn load_memes(filename: &str) -> (HashMap<String, Font<'static>>, Vec<Meme>) {
                 };
                 let text_prefix = read_text_prefix.clone().unwrap_or("").into();
                 let text_suffix = read_text_suffix.clone().unwrap_or("").into();
-                let command = read_command.clone().unwrap_or("").into();
+                let command = read_command.clone().unwrap_or("_default").into();
                 let is_default = read_is_default.unwrap_or(false);
 
                 memes.push(Meme {
@@ -573,7 +571,7 @@ impl EventHandler for Handler {
 
             debug!("Creating meme \"{}\" with text \"{}\"", meme.command, text);
 
-            static GENERATED_IMAGE_FILENAME: &str = "did_you_just_say.png";
+            let generated_image_filename = meme.command.clone() + ".png";
 
             let mut image = meme.image.clone();
 
@@ -586,7 +584,7 @@ impl EventHandler for Handler {
                     .path()
                     .to_str()
                     .expect("Command create_image: Failed to retrieve temporary directory path"),
-                GENERATED_IMAGE_FILENAME
+                generated_image_filename
             );
 
             let fonts = data
