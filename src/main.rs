@@ -732,6 +732,8 @@ impl EventHandler for Handler {
             let mut curr_y = meme.center.y - (line_height * (lines.len() as u32) / 2);
 
             for line in lines {
+                let line = line.trim();
+
                 let x = meme.center.x - get_text_width(&font, &line, scale) / 2;
 
                 debug!("Drawing text at ({}, {})", x, curr_y);
