@@ -15,7 +15,7 @@ use yaml_rust::YamlLoader;
 
 use serenity::client::bridge::gateway::ShardManager;
 use serenity::client::Client;
-use serenity::model::prelude::{Message, Ready};
+use serenity::model::prelude::{Channel, Message, Ready, RoleId};
 use serenity::prelude::{Context, EventHandler, Mutex, TypeMapKey};
 
 struct BotSettings {
@@ -110,6 +110,118 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
     }
 
     return None;
+}
+
+fn expand_mentions(ctx: &Context, msg: &Message, mut text: String) -> String {
+    let re_user = Regex::new(r"<@!?(\d{1,32})>").expect("Unable to create user matching pattern");
+
+    while let Some(mention) = re_user.captures(&text) {
+        let entire_mention = mention
+            .get(0)
+            .expect("Unable to get entire user mention")
+            .as_str();
+        let mentioned_id = mention
+            .get(1)
+            .expect("Unable extract user ID from mention")
+            .as_str();
+
+        let id = mentioned_id.parse::<u64>().unwrap_or(0);
+
+        if let Some(user) = msg.mentions.iter().filter(|u| u.id.0 == id).next() {
+            text = text.replace(entire_mention, format!("@{}", user.name).as_str());
+        } else {
+            text = text.replace(entire_mention, format!("@{}", mentioned_id).as_str());
+        }
+    }
+
+    let re_channel =
+        Regex::new(r"<#(\d{1,32})>").expect("Unable to create channel matching pattern");
+
+    let re_role = Regex::new(r"<@&(\d{1,32})>").expect("Unable to create role matching pattern");
+
+    let mut guild_found = false;
+
+    if let Some(channel) = msg.channel(ctx) {
+        if let Channel::Guild(channel) = channel {
+            if let Some(guild) = channel.read().guild(&ctx) {
+                guild_found = true;
+
+                let channels = &guild.read().channels;
+
+                while let Some(mention) = re_channel.captures(&text) {
+                    let entire_mention = mention
+                        .get(0)
+                        .expect("Unable to get entire channel mention")
+                        .as_str();
+                    let mentioned_id = mention
+                        .get(1)
+                        .expect("Unable extract channel ID from mention")
+                        .as_str();
+
+                    let id = mentioned_id.parse::<u64>().unwrap_or(0);
+
+                    if let Some(channel) = channels.keys().filter(|c| *c.as_u64() == id).next() {
+                        text = text.replace(
+                            entire_mention,
+                            format!("#{}", channel.name(&ctx).unwrap_or(format!("{}", id)))
+                                .as_str(),
+                        );
+                    } else {
+                        text = text.replace(entire_mention, "#deleted-channel");
+                    }
+                }
+
+                let roles = &guild.read().roles;
+
+                while let Some(mention) = re_role.captures(&text) {
+                    let entire_mention = mention
+                        .get(0)
+                        .expect("Unable to get entire role mention")
+                        .as_str();
+                    let mentioned_id = mention
+                        .get(1)
+                        .expect("Unable extract role ID from mention")
+                        .as_str();
+
+                    let id = mentioned_id.parse::<u64>().unwrap_or(0);
+
+                    if let Some(role) = roles.get(&RoleId(id)) {
+                        text = text.replace(entire_mention, format!("@{}", role.name).as_str());
+                    } else {
+                        text = text.replace(entire_mention, "@deleted-role");
+                    }
+                }
+            }
+        }
+    }
+
+    if !guild_found {
+        while let Some(mention) = re_channel.find(&text) {
+            text = text.replace(mention.as_str(), format!("#deleted-channel").as_str());
+        }
+
+        while let Some(mention) = re_role.find(&text) {
+            text = text.replace(mention.as_str(), format!("@deleted-role").as_str());
+        }
+    }
+
+    let re_emoji = Regex::new(r"<a?(:[a-zA-Z0-9~_]+:)\d{1,32}>")
+        .expect("Unable to create emoji matching pattern");
+
+    while let Some(emoji) = re_emoji.captures(&text) {
+        text = text.replace(
+            emoji
+                .get(0)
+                .expect("Unable to get entire emoji match")
+                .as_str(),
+            emoji
+                .get(1)
+                .expect("Unable to extract emoji name from match")
+                .as_str(),
+        );
+    }
+
+    text.into()
 }
 
 fn load_font(filename: &str) -> Result<Font<'static>, String> {
@@ -569,6 +681,8 @@ impl EventHandler for Handler {
 
             let text = meme.text_prefix.clone() + &text.to_uppercase() + &meme.text_suffix;
 
+            let text = expand_mentions(&ctx, &msg, text);
+
             debug!("Creating meme \"{}\" with text \"{}\"", meme.command, text);
 
             let generated_image_filename = meme.command.clone() + ".png";
@@ -611,6 +725,8 @@ impl EventHandler for Handler {
             let scale = meme.scale;
 
             let line_height = get_line_height(&font, scale);
+
+            // TODO: Word wrap
 
             let lines: Vec<&str> = text.lines().collect();
             let mut curr_y = meme.center.y - (line_height * (lines.len() as u32) / 2);
