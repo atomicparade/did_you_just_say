@@ -1,10 +1,10 @@
 # did_you_just_say
 
-
+[![Unlicense](https://img.shields.io/badge/license-Unlicense-blue)](https://choosealicense.com/licenses/unlicense/) [![CC0](https://img.shields.io/badge/license-CC0-blue)](https://creativecommons.org/publicdomain/zero/1.0/)
 
 Discord bot that inserts text into images. Built with [Serenity](https://github.com/serenity-rs/serenity).
 
-# Bot configuration
+## Bot configuration
 
 1. Obtain images and fonts.
 2. Copy `.env.EXAMPLE` to `.env`. Put the Discord bot token in this file and set an administration password (used to authenticate so that you can shut down the bot).
