@@ -79,7 +79,7 @@ fn is_command<'a>(ctx: &Context, msg: &'a Message) -> Option<Command<'a>> {
         .id
         .expect("is_command(): Unable to retrieve bot user ID");
 
-    let re_pattern = format!(r"<@!?{}>\s*(\S*)\s*((?s).*)", bot_user_id);
+    let re_pattern = format!(r"^<@!?{}>\s*(\S*)\s*((?s).*)$", bot_user_id);
     let re_command =
         Regex::new(&re_pattern).expect("Unable to create command matching pattern with bot ID");
 
